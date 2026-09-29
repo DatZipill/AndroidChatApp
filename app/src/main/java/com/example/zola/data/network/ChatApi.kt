@@ -6,7 +6,6 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Query
 
-// Định nghĩa các đường dẫn API mà Android sẽ gọi lên Server
 interface ChatApi {
 
     @POST("/api/register")
@@ -14,9 +13,6 @@ interface ChatApi {
 
     @POST("/api/login")
     suspend fun login(@Body request: LoginRequest): Response<LoginResponse>
-
-    @POST("/api/send_message")
-    suspend fun sendMessage(@Body request: SendMessageRequest): Response<SendMessageResponse>
 
     @GET("/api/messages")
     suspend fun getMessages(

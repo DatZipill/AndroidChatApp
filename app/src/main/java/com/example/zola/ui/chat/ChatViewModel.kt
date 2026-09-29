@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.zola.data.ChatDatabase
 import com.example.zola.data.ChatRepository
 import com.example.zola.data.UserPreferences
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -15,15 +16,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = ChatRepository(database.messageDao())
     private val userPreferences = UserPreferences(application)
 
-    val messages: StateFlow<List<Message>> = repository.messages
+    private val _chatPartner = MutableStateFlow("")
+    private var currentUser = "alice"
+
+    // Lọc danh sách tin nhắn CHỈ thuộc về cuộc trò chuyện giữa currentUser và chatPartner
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val messages: StateFlow<List<Message>> = _chatPartner
+        .flatMapLatest { partner ->
+            if (partner.isBlank()) flowOf(emptyList())
+            else repository.getMessagesForConversation(currentUser, partner)
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
-
-    private var currentUser = "alice"
-    private var chatPartner = ""
 
     init {
         viewModelScope.launch {
@@ -35,29 +42,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Thiết lập người chat cùng và kết nối WebSocket để chat thời gian thực (Real-time)
+    // Khởi tạo phòng chat cho đúng đối tượng
     fun startChatWith(partner: String) {
-        chatPartner = partner
-        
-        // Kéo lịch sử chat về
+        _chatPartner.value = partner
+
         viewModelScope.launch {
-            repository.fetchMessagesFromServer(currentUser, chatPartner)
+            repository.fetchMessagesFromServer(currentUser, partner)
         }
-        
-        // Mở đường truyền WebSocket
+
         repository.connectWebSocket(currentUser)
     }
 
-    // Gửi tin nhắn qua REST API (Server sẽ báo lại qua WebSocket cho người kia)
+    // Gửi tin nhắn
     fun sendMessage(text: String) {
-        if (text.isBlank() || chatPartner.isBlank()) return
+        val partner = _chatPartner.value
+        if (text.isBlank() || partner.isBlank()) return
         viewModelScope.launch {
-            repository.sendMessage(text, currentUser, chatPartner)
+            repository.sendMessage(text, currentUser, partner)
         }
     }
 
     override fun onCleared() {
-        // Ngắt kết nối WebSocket khi thoát phòng chat
         repository.disconnectWebSocket()
     }
 }

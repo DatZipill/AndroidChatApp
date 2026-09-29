@@ -2,7 +2,6 @@ package com.example.zola.data
 
 import com.example.zola.data.network.ApiMessage
 import com.example.zola.data.network.RetrofitClient
-import com.example.zola.data.network.SendMessageRequest
 import com.example.zola.ui.chat.Message
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,38 +15,39 @@ class ChatRepository(private val messageDao: MessageDao) {
 
     private var webSocket: WebSocket? = null
 
-    val messages: Flow<List<Message>> = messageDao.getAllMessages().map { entityList ->
-        entityList.map { entity ->
-            Message(
-                id = entity.id,
-                text = entity.text,
-                isMine = entity.isMine
-            )
+    // Lấy danh sách tin nhắn phân loại theo từng cuộc trò chuyện
+    fun getMessagesForConversation(user1: String, user2: String): Flow<List<Message>> {
+        return messageDao.getMessagesForConversation(user1, user2).map { entityList ->
+            entityList.map { entity ->
+                Message(
+                    id = entity.id,
+                    text = entity.text,
+                    isMine = (entity.sender == user1)
+                )
+            }
         }
     }
 
     // Kết nối WebSocket
     fun connectWebSocket(currentUser: String) {
-        // Đổi http:// thành ws://
         val wsUrl = RetrofitClient.BASE_URL.replace("http", "ws") + "ws/chat"
         val request = Request.Builder().url(wsUrl).build()
 
         webSocket = RetrofitClient.okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                // Gửi thông tin định danh lên Server
                 webSocket.send("""{"username":"$currentUser"}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                // Nhận được tin nhắn từ người khác thông qua WebSocket
                 try {
                     val apiMsg = RetrofitClient.gson.fromJson(text, ApiMessage::class.java)
                     val entity = MessageEntity(
                         id = apiMsg.id,
+                        sender = apiMsg.sender,
+                        receiver = apiMsg.receiver,
                         text = apiMsg.text,
                         isMine = (apiMsg.sender == currentUser)
                     )
-                    // Cập nhật ngay lập tức vào Room
                     CoroutineScope(Dispatchers.IO).launch {
                         messageDao.insertMessage(entity)
                     }
@@ -58,7 +58,7 @@ class ChatRepository(private val messageDao: MessageDao) {
         })
     }
 
-    // Gửi tin nhắn qua API REST (Đồng thời lưu vào local)
+    // Gửi tin nhắn FULL-DUPLEX
     suspend fun sendMessage(text: String, sender: String, receiver: String) {
         if (text.isBlank()) return
 
@@ -66,26 +66,29 @@ class ChatRepository(private val messageDao: MessageDao) {
 
         val entity = MessageEntity(
             id = msgId,
+            sender = sender,
+            receiver = receiver,
             text = text,
             isMine = true
         )
         messageDao.insertMessage(entity)
 
         try {
-            RetrofitClient.api.sendMessage(
-                SendMessageRequest(
-                    id = msgId,
-                    sender = sender,
-                    receiver = receiver,
-                    text = text
-                )
+            val apiMsg = ApiMessage(
+                id = msgId,
+                sender = sender,
+                receiver = receiver,
+                text = text,
+                timestamp = null
             )
+            val jsonString = RetrofitClient.gson.toJson(apiMsg)
+            webSocket?.send(jsonString)
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    // Tải toàn bộ lịch sử (Khi vừa mở chat)
+    // Tải lịch sử chat giữa 2 người
     suspend fun fetchMessagesFromServer(sender: String, receiver: String) {
         try {
             val response = RetrofitClient.api.getMessages(sender = sender, receiver = receiver)
@@ -95,6 +98,8 @@ class ChatRepository(private val messageDao: MessageDao) {
                     val isMine = (apiMsg.sender == sender)
                     val entity = MessageEntity(
                         id = apiMsg.id,
+                        sender = apiMsg.sender,
+                        receiver = apiMsg.receiver,
                         text = apiMsg.text,
                         isMine = isMine
                     )
@@ -105,7 +110,7 @@ class ChatRepository(private val messageDao: MessageDao) {
             e.printStackTrace()
         }
     }
-    
+
     fun disconnectWebSocket() {
         webSocket?.close(1000, "User left")
         webSocket = null

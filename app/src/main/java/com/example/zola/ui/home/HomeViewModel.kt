@@ -44,4 +44,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // Đăng xuất: xóa Session DataStore và báo cho UI nhảy về LoginScreen
+    fun logout(onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            userPreferences.clearSession()
+            onSuccess()
+        }
+    }
 }

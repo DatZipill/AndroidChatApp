@@ -7,7 +7,6 @@ app = Flask(__name__)
 sock = Sock(app)
 DB_NAME = "zola_server.db"
 
-# Từ điển lưu trữ các kết nối WebSocket đang hoạt động. Key là username, value là websocket object
 active_websockets = {}
 
 def init_db():
@@ -20,7 +19,6 @@ def init_db():
             password TEXT NOT NULL
         )
     ''')
-    # Bảng tin nhắn bây giờ dùng ID (dạng TEXT/UUID) do Client gửi lên làm khóa chính!
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -34,25 +32,58 @@ def init_db():
     conn.close()
 
 # -----------------
-# WEBSOCKET ROUTE
+# WEBSOCKET ROUTE (FULL-DUPLEX)
 # -----------------
 @sock.route('/ws/chat')
 def chat_ws(ws):
-    # Lần đầu tiên kết nối, Client Android phải gửi lên 1 chuỗi JSON {"username": "alice"}
     auth_msg = ws.receive()
     username = None
     try:
+        # 1. Điểm danh
         data = json.loads(auth_msg)
         username = data.get("username")
         if username:
             active_websockets[username] = ws
             print(f"WebSocket connected: {username}")
 
-        # Vòng lặp giữ kết nối luôn mở
+        # 2. Vòng lặp nhận tin nhắn từ Client gửi lên
         while True:
-            # Hiện tại Android chỉ gọi API POST /send_message để gửi.
-            # WebSocket chỉ dùng để Server BẮN TIN NHẮN NGƯỢC XUỐNG Android
-            _ = ws.receive()
+            raw_msg = ws.receive()
+            if not raw_msg: break
+
+            msg_data = json.loads(raw_msg)
+            msg_id = msg_data.get('id')
+            sender = msg_data.get('sender')
+            receiver = msg_data.get('receiver')
+            text = msg_data.get('text')
+
+            if msg_id and sender and receiver and text:
+                # Lưu vào SQLite Server
+                try:
+                    conn = sqlite3.connect(DB_NAME)
+                    cursor = conn.cursor()
+                    cursor.execute('INSERT INTO messages (id, sender, receiver, text) VALUES (?, ?, ?, ?)',
+                                   (msg_id, sender, receiver, text))
+                    conn.commit()
+                    conn.close()
+                except sqlite3.IntegrityError:
+                    pass # Bỏ qua nếu tin nhắn bị gửi trùng ID
+
+                # Bắn tin nhắn trực tiếp xuống ống WebSocket của người nhận (nếu họ đang online)
+                if receiver in active_websockets:
+                    try:
+                        payload = json.dumps({
+                            'id': msg_id,
+                            'sender': sender,
+                            'receiver': receiver,
+                            'text': text,
+                            'timestamp': None
+                        })
+                        active_websockets[receiver].send(payload)
+                        print(f"WS: Forwarded message from {sender} to {receiver}")
+                    except Exception as e:
+                        print(f"WS: Failed to forward message: {e}")
+
     except Exception as e:
         print(f"WebSocket Error: {e}")
     finally:
@@ -60,9 +91,8 @@ def chat_ws(ws):
             print(f"WebSocket disconnected: {username}")
             del active_websockets[username]
 
-
 # -----------------
-# API ROUTES
+# API ROUTES (HTTP REST)
 # -----------------
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -95,44 +125,6 @@ def login():
     else:
         return jsonify({'error': 'Sai tên đăng nhập hoặc mật khẩu'}), 401
 
-@app.route('/api/send_message', methods=['POST'])
-def send_message():
-    data = request.json or {}
-    msg_id = data.get('id')  # Bây giờ Client tự tạo ID (UUID)
-    sender = data.get('sender')
-    receiver = data.get('receiver')
-    text = data.get('text')
-
-    if not msg_id or not sender or not receiver or not text:
-        return jsonify({'error': 'Thiếu thông tin'}), 400
-
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO messages (id, sender, receiver, text) VALUES (?, ?, ?, ?)', (msg_id, sender, receiver, text))
-        conn.commit()
-        conn.close()
-    except sqlite3.IntegrityError:
-        pass # Nếu client gửi 2 lần cùng 1 ID thì cứ bỏ qua
-
-    # !!! WEBSOCKET MAGIC !!!
-    # Nếu người nhận đang mở app và kết nối WebSocket, bắn tin nhắn thẳng sang máy họ
-    if receiver in active_websockets:
-        try:
-            payload = json.dumps({
-                'id': msg_id,
-                'sender': sender,
-                'receiver': receiver,
-                'text': text,
-                'timestamp': None
-            })
-            active_websockets[receiver].send(payload)
-            print(f"Pushed message to {receiver} via WebSocket")
-        except Exception as e:
-            print(f"Failed to push message: {e}")
-
-    return jsonify({'message': 'Gửi tin nhắn thành công'}), 201
-
 @app.route('/api/messages', methods=['GET'])
 def get_messages():
     sender = request.args.get('sender')
@@ -147,7 +139,6 @@ def get_messages():
     ''', (sender, receiver, receiver, sender))
     rows = cursor.fetchall()
     conn.close()
-
     messages_list = [{'id': r[0], 'sender': r[1], 'receiver': r[2], 'text': r[3], 'timestamp': r[4]} for r in rows]
     return jsonify({'messages': messages_list}), 200
 
@@ -166,4 +157,5 @@ def get_users():
 
 if __name__ == '__main__':
     init_db()
+    print("Server Flask (WebSocket) đang chạy tại cổng 5000...")
     app.run(host='0.0.0.0', port=5000, debug=True)

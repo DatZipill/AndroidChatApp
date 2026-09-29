@@ -1,51 +1,69 @@
-package com.example.zola.ui.chat // CHÚ Ý: Chỉnh lại package name cho đúng chuẩn
+package com.example.zola.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items // Thêm dòng này để lặp danh sách
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel // Thêm dòng này
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun ChatScreen(
     username: String,
+    onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: ChatViewModel = viewModel() // Compose sẽ tự động tạo hoặc lấy ViewModel đã có
+    viewModel: ChatViewModel = viewModel()
 ) {
     var messageInput by remember { mutableStateOf("") }
     
-    // Khi vừa vào màn hình Chat, khởi tạo phiên chat với người này và tải tin nhắn từ Server
+    // Khởi tạo chat phiên làm việc
     LaunchedEffect(username) {
         viewModel.startChatWith(username)
     }
 
-    // Quan sát state từ ViewModel. Mỗi khi messages thay đổi, UI sẽ tự vẽ lại (Recomposition)
+    // Quan sát danh sách tin nhắn từ ViewModel
     val messages by viewModel.messages.collectAsState()
 
     Column(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding() // Cực kỳ quan trọng: Tự động đẩy khu vực nhập liệu lên TRÊN BÀN PHÍM khi gõ!
     ) {
-        // Thanh tiêu đề
-        Text(
-            text = username,
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(16.dp)
-        )
+        // Thanh tiêu đề Top Bar có nút Quay lại (Back Button)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBackClick) {
+                Text("← Quay lại")
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = username,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(end = 16.dp)
+            )
+        }
+
+        HorizontalDivider()
 
         // Danh sách tin nhắn
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            // Thay vì code cứng, giờ ta sẽ lặp qua danh sách messages
             items(messages) { message ->
                 MessageBubble(text = message.text, isMine = message.isMine)
             }
@@ -53,7 +71,9 @@ fun ChatScreen(
 
         // Khu vực nhập tin nhắn
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
@@ -65,8 +85,8 @@ fun ChatScreen(
 
             Button(
                 onClick = {
-                    viewModel.sendMessage(messageInput) // Gửi tin nhắn
-                    messageInput = "" // Xóa ô nhập sau khi gửi
+                    viewModel.sendMessage(messageInput)
+                    messageInput = ""
                 },
                 modifier = Modifier.padding(start = 8.dp)
             ) {
@@ -76,26 +96,21 @@ fun ChatScreen(
     }
 }
 
-// ----------------------------------------------------
 // Component UI dùng chung: MessageBubble
-// ----------------------------------------------------
 @Composable
 fun MessageBubble(
     text: String,
     isMine: Boolean,
     modifier: Modifier = Modifier
 ) {
-    // Nếu là tin nhắn của mình thì căn lề phải (End), ngược lại căn lề trái (Start)
     val alignment = if (isMine) Alignment.CenterEnd else Alignment.CenterStart
-    
-    // Màu nền tuỳ thuộc vào người gửi
     val backgroundColor = if (isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
     val textColor = if (isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
 
     Box(
         modifier = modifier
-            .fillMaxWidth() // Chiếm hết chiều ngang để Box con bên trong có thể căn lề (Alignment)
-            .padding(vertical = 4.dp),
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
         contentAlignment = alignment
     ) {
         Text(
@@ -104,7 +119,7 @@ fun MessageBubble(
             modifier = Modifier
                 .background(
                     color = backgroundColor,
-                    shape = RoundedCornerShape(12.dp) // Bo góc giống Zalo/Messenger
+                    shape = RoundedCornerShape(12.dp)
                 )
                 .padding(horizontal = 16.dp, vertical = 10.dp)
         )
