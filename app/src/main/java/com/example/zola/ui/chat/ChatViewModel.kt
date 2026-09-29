@@ -5,33 +5,59 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.zola.data.ChatDatabase
 import com.example.zola.data.ChatRepository
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
+import com.example.zola.data.UserPreferences
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-// Thay vì kế thừa ViewModel thông thường, ta dùng AndroidViewModel để có thể lấy được biến 'application'
-// Biến 'application' (Context) rất cần thiết để khởi tạo ChatDatabase
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
-    // Khởi tạo Database và Repository
     private val database = ChatDatabase.getDatabase(application)
     private val repository = ChatRepository(database.messageDao())
+    private val userPreferences = UserPreferences(application)
 
-    // Convert Flow (của Repository) sang StateFlow để Jetpack Compose dễ dàng sử dụng
     val messages: StateFlow<List<Message>> = repository.messages
         .stateIn(
-            scope = viewModelScope, // Vòng đời: Hủy luồng này khi ViewModel bị hủy
-            started = SharingStarted.WhileSubscribed(5000), // Bắt đầu lắng nghe khi UI hiện, tự ngắt nếu UI ẩn
-            initialValue = emptyList() // Giá trị mặc định lúc mới vào màn hình chưa kịp tải DB
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
         )
 
-    fun sendMessage(text: String) {
-        // Gọi hàm của Repository.
-        // Vì sendMessage của Repository bây giờ là 'suspend' (làm việc với Database), 
-        // ta phải chạy nó trong một Coroutine. viewModelScope lo việc này.
+    private var currentUser = "alice"
+    private var chatPartner = ""
+
+    init {
         viewModelScope.launch {
-            repository.sendMessage(text)
+            userPreferences.username.collect { name ->
+                if (!name.isNullOrBlank()) {
+                    currentUser = name
+                }
+            }
         }
+    }
+
+    // Thiết lập người chat cùng và kết nối WebSocket để chat thời gian thực (Real-time)
+    fun startChatWith(partner: String) {
+        chatPartner = partner
+        
+        // Kéo lịch sử chat về
+        viewModelScope.launch {
+            repository.fetchMessagesFromServer(currentUser, chatPartner)
+        }
+        
+        // Mở đường truyền WebSocket
+        repository.connectWebSocket(currentUser)
+    }
+
+    // Gửi tin nhắn qua REST API (Server sẽ báo lại qua WebSocket cho người kia)
+    fun sendMessage(text: String) {
+        if (text.isBlank() || chatPartner.isBlank()) return
+        viewModelScope.launch {
+            repository.sendMessage(text, currentUser, chatPartner)
+        }
+    }
+
+    override fun onCleared() {
+        // Ngắt kết nối WebSocket khi thoát phòng chat
+        repository.disconnectWebSocket()
     }
 }

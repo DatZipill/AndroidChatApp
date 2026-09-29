@@ -20,7 +20,12 @@ fun ChatScreen(
 ) {
     var messageInput by remember { mutableStateOf("") }
     
-    // Quan sát state từ ViewModel. Mỗi khi _messages.value thay đổi, UI sẽ tự vẽ lại (Recomposition)
+    // Khi vừa vào màn hình Chat, khởi tạo phiên chat với người này và tải tin nhắn từ Server
+    LaunchedEffect(username) {
+        viewModel.startChatWith(username)
+    }
+
+    // Quan sát state từ ViewModel. Mỗi khi messages thay đổi, UI sẽ tự vẽ lại (Recomposition)
     val messages by viewModel.messages.collectAsState()
 
     Column(

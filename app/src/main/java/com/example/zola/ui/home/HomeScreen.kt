@@ -1,74 +1,76 @@
-package com.example.chatapp.ui.home
+package com.example.zola.ui.home
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-
-data class ChatPreview(
-    val username: String,
-    val lastMessage: String
-)
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun HomeScreen(
-    onChatClick: (String) -> Unit, // Thêm callback này để báo cho MainActivity biết người dùng đã bấm vào chat
-    modifier: Modifier = Modifier
+    onChatClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: HomeViewModel = viewModel()
 ) {
-
-    val chats = listOf(
-        ChatPreview(
-            username = "Bob",
-            lastMessage = "Hello!"
-        ),
-        ChatPreview(
-            username = "Charlie",
-            lastMessage = "Hi!"
-        )
-    )
+    val users by viewModel.users.collectAsState()
+    val currentUsername by viewModel.currentUsername.collectAsState()
 
     Column(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
     ) {
-
         Text(
-            text = "Tin nhắn",
-            modifier = Modifier.padding(16.dp)
+            text = "Xin chào, $currentUsername",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        LazyColumn {
+        Text(
+            text = "Danh sách người dùng",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
 
-            items(chats) { chat ->
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            onChatClick(chat.username) // Gọi callback và truyền tên người dùng
+        if (users.isEmpty()) {
+            Text(
+                text = "Chưa có người dùng nào khác. Hãy đăng ký thêm tài khoản trên thiết bị hoặc máy ảo khác!",
+                modifier = Modifier.padding(top = 16.dp),
+                color = MaterialTheme.colorScheme.secondary
+            )
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(users) { username ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onChatClick(username) },
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = username,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = "Nhắn tin ➔",
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                        .padding(16.dp)
-                ) {
-
-                    Text(
-                        text = chat.username
-                    )
-
-                    Text(
-                        text = chat.lastMessage
-                    )
+                    }
                 }
             }
         }
     }
-}
-
-@Composable
-@Preview(showBackground = true)
-fun HomeScreenPreview() {
-    HomeScreen(onChatClick = {})
 }

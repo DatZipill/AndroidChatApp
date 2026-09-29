@@ -1,16 +1,18 @@
 import sqlite3
+import json
 from flask import Flask, request, jsonify
+from flask_sock import Sock
 
 app = Flask(__name__)
-
+sock = Sock(app)
 DB_NAME = "zola_server.db"
 
+# Từ điển lưu trữ các kết nối WebSocket đang hoạt động. Key là username, value là websocket object
+active_websockets = {}
+
 def init_db():
-    """Khởi tạo các bảng dữ liệu trong SQLite server"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
-    # Bảng người dùng
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,33 +20,56 @@ def init_db():
             password TEXT NOT NULL
         )
     ''')
-
-    # Bảng tin nhắn trên Server
+    # Bảng tin nhắn bây giờ dùng ID (dạng TEXT/UUID) do Client gửi lên làm khóa chính!
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             sender TEXT NOT NULL,
             receiver TEXT NOT NULL,
             text TEXT NOT NULL,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
     conn.commit()
     conn.close()
 
-# ----------------------------------------------------
-# API 1: Đăng ký tài khoản
-# ----------------------------------------------------
+# -----------------
+# WEBSOCKET ROUTE
+# -----------------
+@sock.route('/ws/chat')
+def chat_ws(ws):
+    # Lần đầu tiên kết nối, Client Android phải gửi lên 1 chuỗi JSON {"username": "alice"}
+    auth_msg = ws.receive()
+    username = None
+    try:
+        data = json.loads(auth_msg)
+        username = data.get("username")
+        if username:
+            active_websockets[username] = ws
+            print(f"WebSocket connected: {username}")
+
+        # Vòng lặp giữ kết nối luôn mở
+        while True:
+            # Hiện tại Android chỉ gọi API POST /send_message để gửi.
+            # WebSocket chỉ dùng để Server BẮN TIN NHẮN NGƯỢC XUỐNG Android
+            _ = ws.receive()
+    except Exception as e:
+        print(f"WebSocket Error: {e}")
+    finally:
+        if username and username in active_websockets:
+            print(f"WebSocket disconnected: {username}")
+            del active_websockets[username]
+
+
+# -----------------
+# API ROUTES
+# -----------------
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.json or {}
     username = data.get('username')
     password = data.get('password')
-
-    if not username or not password:
-        return jsonify({'error': 'Vui lòng nhập đủ username và password'}), 400
-
+    if not username or not password: return jsonify({'error': 'Vui lòng nhập đủ'}), 400
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -55,32 +80,90 @@ def register():
     except sqlite3.IntegrityError:
         return jsonify({'error': 'Tài khoản đã tồn tại'}), 400
 
-# ----------------------------------------------------
-# API 2: Đăng nhập
-# ----------------------------------------------------
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json or {}
     username = data.get('username')
     password = data.get('password')
-
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password))
     user = cursor.fetchone()
     conn.close()
-
     if user:
-        # Trả về token giả định đơn giản (dựa vào username)
-        return jsonify({
-            'message': 'Đăng nhập thành công',
-            'token': f'fake-jwt-token-for-{username}',
-            'username': username
-        }), 200
+        return jsonify({'message': 'Đăng nhập thành công','token': f'token-{username}','username': username}), 200
     else:
         return jsonify({'error': 'Sai tên đăng nhập hoặc mật khẩu'}), 401
 
+@app.route('/api/send_message', methods=['POST'])
+def send_message():
+    data = request.json or {}
+    msg_id = data.get('id')  # Bây giờ Client tự tạo ID (UUID)
+    sender = data.get('sender')
+    receiver = data.get('receiver')
+    text = data.get('text')
+
+    if not msg_id or not sender or not receiver or not text:
+        return jsonify({'error': 'Thiếu thông tin'}), 400
+
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO messages (id, sender, receiver, text) VALUES (?, ?, ?, ?)', (msg_id, sender, receiver, text))
+        conn.commit()
+        conn.close()
+    except sqlite3.IntegrityError:
+        pass # Nếu client gửi 2 lần cùng 1 ID thì cứ bỏ qua
+
+    # !!! WEBSOCKET MAGIC !!!
+    # Nếu người nhận đang mở app và kết nối WebSocket, bắn tin nhắn thẳng sang máy họ
+    if receiver in active_websockets:
+        try:
+            payload = json.dumps({
+                'id': msg_id,
+                'sender': sender,
+                'receiver': receiver,
+                'text': text,
+                'timestamp': None
+            })
+            active_websockets[receiver].send(payload)
+            print(f"Pushed message to {receiver} via WebSocket")
+        except Exception as e:
+            print(f"Failed to push message: {e}")
+
+    return jsonify({'message': 'Gửi tin nhắn thành công'}), 201
+
+@app.route('/api/messages', methods=['GET'])
+def get_messages():
+    sender = request.args.get('sender')
+    receiver = request.args.get('receiver')
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, sender, receiver, text, timestamp
+        FROM messages
+        WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?)
+        ORDER BY timestamp ASC
+    ''', (sender, receiver, receiver, sender))
+    rows = cursor.fetchall()
+    conn.close()
+
+    messages_list = [{'id': r[0], 'sender': r[1], 'receiver': r[2], 'text': r[3], 'timestamp': r[4]} for r in rows]
+    return jsonify({'messages': messages_list}), 200
+
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    current_user = request.args.get('current_user')
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    if current_user:
+        cursor.execute('SELECT username FROM users WHERE username != ?', (current_user,))
+    else:
+        cursor.execute('SELECT username FROM users')
+    rows = cursor.fetchall()
+    conn.close()
+    return jsonify({'users': [r[0] for r in rows]}), 200
+
 if __name__ == '__main__':
     init_db()
-    print("Server Flask đang chạy tại cổng 5000...")
     app.run(host='0.0.0.0', port=5000, debug=True)
